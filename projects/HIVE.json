@@ -1,0 +1,16 @@
+{
+  "projectKey": "HIVE",
+  "repoPath": "/mnt/c/Users/Florent Didelot/Documents/GitHub/hive2",
+  "ghRepo": "Flo976/hive2",
+  "statuses": {
+    "TODO": "10207",
+    "IN_PROGRESS": "10208",
+    "DONE": "10209"
+  },
+  "transitions": {
+    "start": "En cours",
+    "done": "Terminé(e)",
+    "reopen": "À faire"
+  },
+  "promptContext": "projet Hive (agent IA multi-tenant SaaS)"
+}
