@@ -398,8 +398,8 @@ async function run(ticket, opts) {
           break;
         }
 
-        log("Waiting 15s for Jira index refresh...");
-        await sleep(15000);
+        log("Waiting 30s for Jira index + graphiti-memory processing...");
+        await sleep(30000);
       }
     } else {
       // ─── Sequential mode ────────────────────────────────────────────
@@ -432,9 +432,9 @@ async function run(ticket, opts) {
             }
           }
 
-          // Wait for Jira search index to update after status change
-          log("Waiting 15s for Jira index refresh...");
-          await sleep(15000);
+          // Wait for Jira search index + graphiti-memory processing
+          log("Waiting 30s for Jira index + graphiti-memory processing...");
+          await sleep(30000);
         } else {
           failures++;
           consecutiveFailures++;
