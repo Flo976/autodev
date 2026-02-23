@@ -1,6 +1,6 @@
 {
   "projectKey": "HIVE",
-  "repoPath": "/mnt/c/Users/Florent Didelot/Documents/GitHub/hive2",
+  "repoPath": "/home/florent-didelot/Documents/GitHub/hive2",
   "ghRepo": "Flo976/hive2",
   "statuses": {
     "TODO": "10207",
@@ -12,5 +12,6 @@
     "done": "Terminé(e)",
     "reopen": "À faire"
   },
-  "promptContext": "projet Hive (agent IA multi-tenant SaaS)"
+  "promptContext": "projet Hive (agent IA multi-tenant SaaS)",
+  "planFile": "docs/plans/2026-02-23-mcp-server-plan.md"
 }

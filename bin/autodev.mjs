@@ -195,7 +195,7 @@ async function handleFailure(config, ticket, branch, reason, { blocked = false }
 
 // ─── Process a single ticket ────────────────────────────────────────────────
 
-async function processTicket(config, key, { dryRun = false, autoClose = false } = {}) {
+async function processTicket(config, key, { dryRun = false, autoClose = false, branch: existingBranch = null } = {}) {
   setCurrentTicket(key);
   log("=".repeat(60));
   log(`Processing ticket${dryRun ? " (DRY RUN)" : ""}`);
@@ -232,14 +232,16 @@ async function processTicket(config, key, { dryRun = false, autoClose = false } 
     return { success: true, reason: "dry_run" };
   }
 
-  let branch = null;
+  let branch = existingBranch;
 
   try {
     // 4. Transition to "En cours"
     await transitionTicket(config, key, config.transitions.start);
 
-    // 5. Create branch
-    branch = createBranch(config, ticket);
+    // 5. Create branch (skip if already provided, e.g. worktree mode)
+    if (!branch) {
+      branch = createBranch(config, ticket);
+    }
 
     // 6. Build prompt and execute
     const prompt = buildPrompt(config, ticket);
@@ -251,8 +253,23 @@ async function processTicket(config, key, { dryRun = false, autoClose = false } 
     // 7. Evaluate
     const evalResult = evaluateResult(config, claudeOutput);
 
-    if (evalResult.success) {
-      // 8. Success
+    if (evalResult.alreadyDone) {
+      // 8a. Already done — close ticket without PR
+      log("ALREADY DONE — closing ticket without PR...");
+      cleanupBranch(config, branch);
+
+      if (autoClose) {
+        await transitionTicket(config, key, config.transitions.done);
+      }
+      await commentTicket(
+        config,
+        key,
+        `[AutoDev] Ticket deja implemente — fermeture automatique.\n\n${evalResult.summary}`
+      );
+      log("Done (already done)!");
+      return { success: true, alreadyDone: true, sprintName: ticket.sprintName };
+    } else if (evalResult.success) {
+      // 8b. Success — create PR
       const prUrl = await handleSuccess(config, ticket, branch, evalResult, autoClose);
       log("Done!");
       return { success: true, prUrl, sprintName: ticket.sprintName };
@@ -358,7 +375,7 @@ async function run(ticket, opts) {
             const worktreeConfig = { ...config, repoPath: worktreePath };
 
             try {
-              return await processTicket(worktreeConfig, key, { dryRun: false, autoClose: true });
+              return await processTicket(worktreeConfig, key, { dryRun: false, autoClose: true, branch: branchName });
             } finally {
               removeWorktree(config, key);
             }
@@ -386,9 +403,12 @@ async function run(ticket, opts) {
       }
     } else {
       // ─── Sequential mode ────────────────────────────────────────────
+      const skipKeys = new Set();
+      let consecutiveFailures = 0;
+
       while (true) {
         log(autoClose ? `Processed: ${successes} ok, ${failures} failed` : `Attempt ${failures + 1}/${MAX_NEXT_ATTEMPTS}`);
-        const key = await findNextTicket(config);
+        const key = await findNextTicket(config, skipKeys);
         if (!key) {
           log("No eligible ticket found. Exiting.");
           break;
@@ -397,6 +417,7 @@ async function run(ticket, opts) {
         const result = await processTicket(config, key, { dryRun, autoClose });
         if (result.success) {
           successes++;
+          consecutiveFailures = 0;
           if (!autoClose) break;
 
           // Check sprint completion after each successful ticket
@@ -416,13 +437,15 @@ async function run(ticket, opts) {
           await sleep(15000);
         } else {
           failures++;
-          log(`Ticket failed, trying next...`);
+          consecutiveFailures++;
+          skipKeys.add(key);
+          log(`Ticket ${key} failed, skipping for this session. Trying next...`);
           if (!autoClose && failures >= MAX_NEXT_ATTEMPTS) {
             log(`Max attempts (${MAX_NEXT_ATTEMPTS}) reached. Exiting.`);
             break;
           }
-          if (autoClose && failures >= 5) {
-            log("Too many consecutive failures. Exiting.");
+          if (autoClose && consecutiveFailures >= 5) {
+            log("5 consecutive failures. Exiting.");
             break;
           }
         }

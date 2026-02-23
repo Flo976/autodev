@@ -108,11 +108,42 @@ node bin/autodev.mjs --project HIVE --auto-close --next --parallel 3
 
 **Project key** is deduced from the ticket prefix (`HIVE-42` -> `HIVE`) or specified via `--project`.
 
+## MCP Server
+
+Autodev can also run as an MCP server, exposing Jira tools to Claude Code or any MCP client.
+
+### Setup
+
+Add to your Claude Code settings (`.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "autodev": {
+      "command": "node",
+      "args": ["/path/to/autodev/bin/mcp-server.mjs"]
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_projects` | List configured projects |
+| `get_next_ticket` | Next unblocked ticket for a project |
+| `fetch_ticket` | Full ticket details |
+| `search_tickets` | JQL search |
+| `transition_ticket` | Change ticket status |
+| `comment_ticket` | Add a comment |
+
 ## Architecture
 
 ```
 autodev/
   bin/autodev.mjs        # CLI entry point (commander)
+  bin/mcp-server.mjs     # MCP server entry point (stdio)
   lib/
     config.mjs           # Project config + .env loading
     log.mjs              # Logging with ticket prefix
