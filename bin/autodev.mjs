@@ -21,6 +21,48 @@ import { ensureProjectContext } from "../lib/context.mjs";
 import { publishConfluenceReport } from "../lib/confluence.mjs";
 
 const MAX_NEXT_ATTEMPTS = 3;
+let mergeQueue = Promise.resolve();
+
+async function withMergeLock(fn) {
+  const previous = mergeQueue;
+  let release;
+  mergeQueue = new Promise((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+function mergeWithRetry(config, prUrl, branch, maxRetries = 2) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    attempt += 1;
+    try {
+      mergePR(config, prUrl);
+      return;
+    } catch (e) {
+      if (attempt >= maxRetries) throw e;
+      logError(`Merge failed (attempt ${attempt}/${maxRetries}): ${e.message}`);
+      log("Rebasing branch on origin/main and retrying merge...");
+      try {
+        git(config, "fetch origin main");
+        git(config, `checkout ${branch}`);
+        git(config, "rebase origin/main");
+        git(config, "push --force-with-lease");
+      } catch (rebaseErr) {
+        logError(`Rebase failed: ${rebaseErr.message}`);
+        try {
+          git(config, "rebase --abort");
+        } catch {}
+        throw rebaseErr;
+      }
+    }
+  }
+}
 
 // ─── Check dependencies (inlined) ──────────────────────────────────────────
 
@@ -77,29 +119,32 @@ async function handleSuccess(config, ticket, branch, evalResult, autoClose = fal
   const prUrl = createPR(config, prTitle, prBodyStr);
 
   if (autoClose) {
-    // Merge PR (squash) and delete remote branch
-    log("Auto-closing: merging PR...");
-    mergePR(config, prUrl);
+    await withMergeLock(async () => {
+      log("Auto-closing: waiting for merge slot...");
+      // Merge PR (squash) and delete remote branch
+      log("Auto-closing: merging PR...");
+      mergeWithRetry(config, prUrl, branch, 2);
 
-    // Update local repo
-    git(config, "checkout main");
-    git(config, "pull origin main");
+      // Update local repo
+      git(config, "checkout main");
+      git(config, "pull origin main");
 
-    // Transition to done
-    await transitionTicket(config, ticket.key, config.transitions.done);
+      // Transition to done
+      await transitionTicket(config, ticket.key, config.transitions.done);
 
-    // Comment in Jira
-    await commentTicket(
-      config,
-      ticket.key,
-      `[AutoDev] PR mergee et ticket clos : ${prUrl}\n\nBranche: ${branch}\nFichiers modifies: ${(evalResult.modifiedFiles || []).length}`
-    );
+      // Comment in Jira
+      await commentTicket(
+        config,
+        ticket.key,
+        `[AutoDev] PR mergee et ticket clos : ${prUrl}\n\nBranche: ${branch}\nFichiers modifies: ${(evalResult.modifiedFiles || []).length}`
+      );
 
-    // Confluence report
-    const confluenceUrl = await publishConfluenceReport(config, ticket, evalResult, prUrl);
-    if (confluenceUrl) {
-      await commentTicket(config, ticket.key, `[AutoDev] Rapport Confluence : ${confluenceUrl}`);
-    }
+      // Confluence report
+      const confluenceUrl = await publishConfluenceReport(config, ticket, evalResult, prUrl);
+      if (confluenceUrl) {
+        await commentTicket(config, ticket.key, `[AutoDev] Rapport Confluence : ${confluenceUrl}`);
+      }
+    });
   } else {
     // Comment in Jira (PR only, no merge)
     await commentTicket(
