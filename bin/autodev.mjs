@@ -19,6 +19,7 @@ import { createPR, mergePR } from "../lib/github.mjs";
 import { checkSprintCompletion, createSprintBranch } from "../lib/sprint.mjs";
 import { ensureProjectContext } from "../lib/context.mjs";
 import { publishConfluenceReport } from "../lib/confluence.mjs";
+import { exportDoneTasks } from "../lib/export.mjs";
 
 const MAX_NEXT_ATTEMPTS = 3;
 let mergeQueue = Promise.resolve();
@@ -127,7 +128,7 @@ async function handleSuccess(config, ticket, branch, evalResult, autoClose = fal
 
       // Update local repo
       git(config, "checkout main");
-      git(config, "pull origin main");
+      git(config, "pull --rebase origin main");
 
       // Transition to done
       await transitionTicket(config, ticket.key, config.transitions.done);
@@ -300,6 +301,8 @@ program
   .option("--dry-run", "Analyze without executing")
   .option("--parallel <n>", "Max parallel workers (default: 1)", "1")
   .option("--init", "Bootstrap context files (Phase 2)")
+  .option("--export-done", "Export done tasks to Markdown")
+  .option("--sprint <name>", "Filter by sprint name (with --export-done)")
   .action(async (ticket, opts) => {
     try {
       await run(ticket, opts);
@@ -314,7 +317,7 @@ program.parse();
 // ─── Main run logic ─────────────────────────────────────────────────────────
 
 async function run(ticket, opts) {
-  const { project, next, autoClose, dryRun, init } = opts;
+  const { project, next, autoClose, dryRun, init, exportDone, sprint } = opts;
   const parallel = Math.min(parseInt(opts.parallel) || 1, 4);
 
   // Resolve project key
@@ -329,8 +332,8 @@ async function run(ticket, opts) {
       console.error("Error: --next requires --project <key> when no ticket is given");
       process.exit(1);
     }
-  } else if (init) {
-    console.error("Error: --init requires --project <key> or a ticket key");
+  } else if (init || exportDone) {
+    console.error("Error: --init/--export-done requires --project <key>");
     process.exit(1);
   } else {
     console.error("Error: provide a ticket key or use --next");
@@ -343,6 +346,15 @@ async function run(ticket, opts) {
   if (init) {
     ensureProjectContext(config, { skipValidation: true });
     log("Context files initialized successfully.");
+    process.exit(0);
+  }
+
+  // --export-done: export done tasks and exit
+  if (exportDone) {
+    const filePath = await exportDoneTasks(config, { sprint });
+    if (filePath) {
+      log(`Done tasks exported to ${filePath}`);
+    }
     process.exit(0);
   }
 
