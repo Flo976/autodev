@@ -33,6 +33,9 @@ node bin/autodev.mjs --project HIVE --plan docs/plan.md --step tasks        # St
 node bin/autodev.mjs --project HIVE --plan docs/plan.md --step validate     # Step 3: show summary
 node bin/autodev.mjs --project HIVE --plan docs/plan.md --import            # Step 4: import to Jira
 node bin/autodev.mjs --project HIVE --plan docs/plan.md --import --dry-run  # Preview import
+node bin/autodev.mjs --project HIVE --velocity                          # Sprint velocity (last 5)
+node bin/autodev.mjs --project HIVE --stale                             # Stale tickets (> 7 days)
+node bin/autodev.mjs --project HIVE --stale --days 14                   # Custom threshold
 ```
 
 No test suite — validate via `--dry-run` on representative tickets.
@@ -59,8 +62,8 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 **Key modules:**
 - `lib/jira.mjs` — Jira REST API v3 + Agile API v1 with 150ms throttle. Handles ADF descriptions, issue links, transitions, comments, JQL search, versions, sprints, labels, components.
 - `lib/claude.mjs` — Prompt building + CLI execution. Marker file detection (`BLOCKED.md`, `ALREADY_DONE.md`). Auto-commits uncommitted changes.
-- `lib/git.mjs` — Branch creation/cleanup, worktree management for parallel mode (`/tmp/autodev-{KEY}`).
-- `lib/github.mjs` — PR creation/merge via `gh` CLI.
+- `lib/git.mjs` — Branch creation/cleanup, worktree management for parallel mode (`/tmp/autodev-{KEY}`), sprint branch support (opt-in).
+- `lib/github.mjs` — PR creation/merge via `gh` CLI. Sprint PR support (sprint → main).
 - `lib/context.mjs` — Bootstraps `autodev/` context directory in target repos from `templates/`.
 - `lib/sprint.mjs` — Detects sprint completion, generates recap markdown, creates recap PR.
 - `lib/confluence.mjs` — Confluence Cloud API v2: CRUD pages, markdown-to-storage conversion, implementation reports.
@@ -68,6 +71,7 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 - `lib/sprint-lifecycle.mjs` — Sprint lifecycle: close active sprint, create next, move carryover tickets.
 - `lib/planner.mjs` — Planning agent orchestrator: plan.md → analyze → sprints → tasks → Jira import. State in `autodev/plan-state.json`.
 - `lib/planner-prompts.mjs` — Prompt templates for each planning step (analyze, sprints, tasks).
+- `lib/metrics.mjs` — Sprint velocity tracking, stale ticket detection.
 
 ## Jira API specifics
 
@@ -78,7 +82,7 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 
 ## Project config format
 
-Each project needs `projects/{KEY}.json` with: `projectKey`, `repoPath`, `ghRepo`, `statuses` (TODO/IN_PROGRESS/DONE IDs), `transitions` (start/done/reopen names), `promptContext`. Optional: `confluence` block, `release` block (`tagPrefix`, `confluenceChangelogPageId`), `components` mapping (glob pattern → component name), `boardId`.
+Each project needs `projects/{KEY}.json` with: `projectKey`, `repoPath`, `ghRepo`, `statuses` (TODO/IN_PROGRESS/DONE IDs), `transitions` (start/done/reopen names), `promptContext`. Optional: `confluence` block, `release` block (`tagPrefix`, `confluenceChangelogPageId`), `components` mapping (glob pattern → component name), `boardId`, `sprintBranches` block (`enabled`, `mergeStrategy`).
 
 ## Conventions
 
