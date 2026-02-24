@@ -6,15 +6,17 @@
  * Provides menu-driven access to all autodev features.
  */
 
-import { readdirSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { join, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import { select, input, confirm, number } from "@inquirer/prompts";
+import { ExitPromptError } from "@inquirer/core";
 import { execFileSync } from "child_process";
 import { loadConfig } from "../lib/config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
 
 // ─── ANSI color helpers ──────────────────────────────────────────────────────
 
@@ -42,10 +44,10 @@ function printBanner(projectKey, projectDesc) {
   \\/__/     \\/__/               \\/__/     \\/__/     \\/__/
 `;
   console.log(`${c.cyan}${banner}${c.reset}`);
-  console.log(`  ${c.dim}--- by Sooatek ---${c.reset}`);
-  console.log(`  ${c.dim}v0.1.0${c.reset}`);
+  console.log(`                    ${c.dim}--- by Sooatek ---${c.reset}`);
+  console.log(`                       ${c.dim}v${pkg.version}${c.reset}`);
   console.log();
-  const desc = projectDesc ? `  ${c.dim}${projectDesc}${c.reset}` : "";
+  const desc = projectDesc ? `  ${c.dim}(${projectDesc})${c.reset}` : "";
   console.log(`  ${c.bold}${c.green}Projet : ${projectKey}${c.reset}${desc}`);
   console.log();
 }
@@ -70,12 +72,10 @@ async function selectProject() {
     return projects[0];
   }
 
-  const choice = await select({
+  return select({
     message: "Choisir un projet",
     choices: projects.map((p) => ({ name: p, value: p })),
   });
-
-  return choice;
 }
 
 // ─── runAutodev helper ──────────────────────────────────────────────────────
@@ -86,11 +86,14 @@ function runAutodev(args) {
     execFileSync("node", args, {
       stdio: "inherit",
       cwd: ROOT,
-      timeout: 600000,
     });
   } catch (err) {
-    const code = err.status ?? err.code ?? "unknown";
-    console.error(`${c.red}Commande terminee avec code ${code}${c.reset}`);
+    if (err.killed) {
+      console.error(`${c.red}Commande interrompue (timeout)${c.reset}`);
+    } else {
+      const code = err.status ?? err.code ?? "unknown";
+      console.error(`${c.red}Commande terminee avec code ${code}${c.reset}`);
+    }
   }
 }
 
@@ -105,19 +108,6 @@ async function handleTicket(config) {
     ],
   });
 
-  const dryRun = await confirm({
-    message: "Dry-run ?",
-    default: false,
-  });
-
-  let autoClose = false;
-  if (!dryRun) {
-    autoClose = await confirm({
-      message: "Auto-close (merge + fermer) ?",
-      default: false,
-    });
-  }
-
   const args = ["bin/autodev.mjs", "--project", config.projectKey];
 
   if (mode === "specific") {
@@ -130,13 +120,18 @@ async function handleTicket(config) {
     args.push("--next");
   }
 
-  if (dryRun) {
-    args.push("--dry-run");
-  }
+  const autoClose = await confirm({
+    message: "Auto-close (merge + fermer) ?",
+    default: false,
+  });
 
-  if (autoClose) {
-    args.push("--auto-close");
-  }
+  const dryRun = await confirm({
+    message: "Dry-run ?",
+    default: false,
+  });
+
+  if (autoClose) args.push("--auto-close");
+  if (dryRun) args.push("--dry-run");
 
   if (mode === "next" && autoClose) {
     const workers = await number({
@@ -144,8 +139,9 @@ async function handleTicket(config) {
       default: 1,
       min: 1,
       max: 4,
+      validate: (val) => (val !== undefined && val >= 1 && val <= 4) || "Entrer un nombre entre 1 et 4",
     });
-    if (workers > 1) {
+    if ((workers ?? 1) > 1) {
       args.push("--parallel", String(workers));
     }
   }
@@ -157,21 +153,9 @@ async function handleRelease(config) {
   const mode = await select({
     message: "Version de release",
     choices: [
-      { name: "Auto-detect", value: "auto" },
+      { name: "Auto-detect (depuis le dernier tag git)", value: "auto" },
       { name: "Version manuelle", value: "manual" },
     ],
-  });
-
-  let version;
-  if (mode === "manual") {
-    version = await input({
-      message: "Nom de la version",
-    });
-  }
-
-  const dryRun = await confirm({
-    message: "Dry-run ?",
-    default: false,
   });
 
   const args = ["bin/autodev.mjs", "--project", config.projectKey];
@@ -179,12 +163,19 @@ async function handleRelease(config) {
   if (mode === "auto") {
     args.push("--release");
   } else {
+    const version = await input({
+      message: "Nom de la version (ex: v1.2.0)",
+      validate: (v) => v.length > 0 || "Version requise",
+    });
     args.push("--release", version);
   }
 
-  if (dryRun) {
-    args.push("--dry-run");
-  }
+  const dryRun = await confirm({
+    message: "Dry-run ?",
+    default: false,
+  });
+
+  if (dryRun) args.push("--dry-run");
 
   runAutodev(args);
 }
@@ -213,14 +204,8 @@ async function handleSprint(config) {
     });
 
     args.push("--close-sprint");
-
-    if (dryRun) {
-      args.push("--dry-run");
-    }
-
-    if (!recap) {
-      args.push("--no-recap");
-    }
+    if (dryRun) args.push("--dry-run");
+    if (!recap) args.push("--no-recap");
   } else if (action === "velocity") {
     args.push("--velocity");
   } else if (action === "stale") {
@@ -228,8 +213,9 @@ async function handleSprint(config) {
       message: "Seuil en jours",
       default: 7,
       min: 1,
+      validate: (val) => (val !== undefined && val >= 1) || "Entrer un nombre >= 1",
     });
-    args.push("--stale", "--days", String(days));
+    args.push("--stale", "--days", String(days ?? 7));
   }
 
   runAutodev(args);
@@ -237,13 +223,14 @@ async function handleSprint(config) {
 
 async function handlePlanning(config) {
   const planFile = await input({
-    message: "Chemin du fichier plan",
+    message: "Chemin du fichier plan (relatif au repo)",
+    validate: (v) => v.length > 0 || "Chemin requis",
   });
 
   const step = await select({
     message: "Etape",
     choices: [
-      { name: "Flow complet", value: "full" },
+      { name: "Flow complet (commence par analyze)", value: "full" },
       { name: "Analyze (etape 0)", value: "analyze" },
       { name: "Sprints (etape 1)", value: "sprints" },
       { name: "Tasks (etape 2)", value: "tasks" },
@@ -252,24 +239,14 @@ async function handlePlanning(config) {
     ],
   });
 
-  const args = ["bin/autodev.mjs", "--project", config.projectKey];
-  args.push("--plan", planFile);
-
-  if (step !== "full" && step !== "import") {
-    args.push("--step", step);
-  }
+  const args = ["bin/autodev.mjs", "--project", config.projectKey, "--plan", planFile];
 
   if (step === "import") {
     args.push("--import");
-
-    const dryRun = await confirm({
-      message: "Dry-run ?",
-      default: false,
-    });
-
-    if (dryRun) {
-      args.push("--dry-run");
-    }
+    const dryRun = await confirm({ message: "Dry-run ?", default: false });
+    if (dryRun) args.push("--dry-run");
+  } else if (step !== "full") {
+    args.push("--step", step);
   }
 
   runAutodev(args);
@@ -281,12 +258,8 @@ async function handleVerify(config) {
     default: "",
   });
 
-  const args = ["bin/autodev.mjs", "--project", config.projectKey];
-  args.push("--verify");
-
-  if (sprint) {
-    args.push("--sprint", sprint);
-  }
+  const args = ["bin/autodev.mjs", "--project", config.projectKey, "--verify"];
+  if (sprint) args.push("--sprint", sprint);
 
   runAutodev(args);
 }
@@ -297,47 +270,35 @@ async function handleExport(config) {
     default: "",
   });
 
-  const args = ["bin/autodev.mjs", "--project", config.projectKey];
-  args.push("--export-done");
-
-  if (sprint) {
-    args.push("--sprint", sprint);
-  }
+  const args = ["bin/autodev.mjs", "--project", config.projectKey, "--export-done"];
+  if (sprint) args.push("--sprint", sprint);
 
   runAutodev(args);
 }
 
 async function handleInit(config) {
-  const args = ["bin/autodev.mjs", "--project", config.projectKey];
-  args.push("--init");
-  runAutodev(args);
+  runAutodev(["bin/autodev.mjs", "--project", config.projectKey, "--init"]);
 }
 
 // ─── Action handler ─────────────────────────────────────────────────────────
 
 async function handleAction(action, config) {
-  switch (action) {
-    case "ticket":
-      await handleTicket(config);
-      break;
-    case "release":
-      await handleRelease(config);
-      break;
-    case "sprint":
-      await handleSprint(config);
-      break;
-    case "planning":
-      await handlePlanning(config);
-      break;
-    case "verify":
-      await handleVerify(config);
-      break;
-    case "export":
-      await handleExport(config);
-      break;
-    case "init":
-      await handleInit(config);
-      break;
+  try {
+    switch (action) {
+      case "ticket":  return await handleTicket(config);
+      case "release": return await handleRelease(config);
+      case "sprint":  return await handleSprint(config);
+      case "planning": return await handlePlanning(config);
+      case "verify":  return await handleVerify(config);
+      case "export":  return await handleExport(config);
+      case "init":    return await handleInit(config);
+    }
+  } catch (err) {
+    if (err instanceof ExitPromptError) {
+      console.log(`\n${c.dim}Annule.${c.reset}`);
+      return;
+    }
+    throw err;
   }
 }
 
@@ -362,11 +323,11 @@ async function mainMenu(projectKey, config) {
 
     if (action === "quit") {
       console.log(`\n${c.dim}A bientot !${c.reset}\n`);
-      return { quit: true };
+      return "quit";
     }
 
     if (action === "switch") {
-      return { quit: false, switchProject: true };
+      return "switch";
     }
 
     await handleAction(action, config);
@@ -377,20 +338,29 @@ async function mainMenu(projectKey, config) {
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
 export async function startInteractive() {
-  let quit = false;
+  try {
+    while (true) {
+      const projectKey = await selectProject();
 
-  while (!quit) {
-    const projectKey = await selectProject();
-    const config = loadConfig(projectKey);
-    const projectDesc = config.promptContext || "";
+      let config;
+      try {
+        config = loadConfig(projectKey);
+      } catch (err) {
+        console.error(`${c.red}${err.message}${c.reset}`);
+        continue;
+      }
 
-    printBanner(projectKey, projectDesc);
+      printBanner(projectKey, config.promptContext || "");
 
-    const result = await mainMenu(projectKey, config);
-
-    if (result.quit) {
-      quit = true;
+      const result = await mainMenu(projectKey, config);
+      if (result === "quit") break;
+      // "switch" → loop restarts with selectProject()
     }
-    // If switchProject, the while loop restarts with selectProject()
+  } catch (err) {
+    if (err instanceof ExitPromptError) {
+      console.log(`\n${c.dim}Bye!${c.reset}\n`);
+      return;
+    }
+    throw err;
   }
 }
