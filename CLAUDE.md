@@ -10,6 +10,7 @@ Autodev automates Jira ticket execution via Claude Code CLI. It fetches unblocke
 
 ```bash
 npm install                                              # Install dependencies
+node bin/autodev.mjs                                     # Interactive mode (menu-driven)
 node bin/autodev.mjs --help                              # Show CLI options
 node bin/autodev.mjs --dry-run HIVE-42                   # Simulate ticket (no execution)
 node bin/autodev.mjs HIVE-42                             # Execute specific ticket
@@ -72,6 +73,7 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 - `lib/planner.mjs` — Planning agent orchestrator: plan.md → analyze → sprints → tasks → Jira import. State in `autodev/plan-state.json`.
 - `lib/planner-prompts.mjs` — Prompt templates for each planning step (analyze, sprints, tasks).
 - `lib/metrics.mjs` — Sprint velocity, average lead time, stale ticket detection.
+- `bin/autodev-interactive.mjs` — Interactive menu-driven CLI ("AUTODEV by Sooatek"). Launched when no arguments given. Uses `@inquirer/prompts` for menus, delegates to autodev.mjs via child process.
 
 ## Jira API specifics
 
