@@ -26,6 +26,13 @@ node bin/autodev.mjs --project HIVE --release "v1.0.0"                # Create r
 node bin/autodev.mjs --project HIVE --release --dry-run               # Auto-detect version, preview
 node bin/autodev.mjs --project HIVE --close-sprint                    # Close sprint, create next
 node bin/autodev.mjs --project HIVE --close-sprint --dry-run          # Preview sprint close
+node bin/autodev.mjs --project HIVE --plan docs/plan.md                     # Full planning flow (starts at analyze)
+node bin/autodev.mjs --project HIVE --plan docs/plan.md --step analyze      # Step 0: analyze plan
+node bin/autodev.mjs --project HIVE --plan docs/plan.md --step sprints      # Step 1: split into sprints
+node bin/autodev.mjs --project HIVE --plan docs/plan.md --step tasks        # Step 2: detail tasks per sprint
+node bin/autodev.mjs --project HIVE --plan docs/plan.md --step validate     # Step 3: show summary
+node bin/autodev.mjs --project HIVE --plan docs/plan.md --import            # Step 4: import to Jira
+node bin/autodev.mjs --project HIVE --plan docs/plan.md --import --dry-run  # Preview import
 ```
 
 No test suite — validate via `--dry-run` on representative tickets.
@@ -59,6 +66,8 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 - `lib/confluence.mjs` — Confluence Cloud API v2: CRUD pages, markdown-to-storage conversion, implementation reports.
 - `lib/release.mjs` — Release management: Jira versions, fixVersion assignment, release notes, GitHub Release, Confluence changelog.
 - `lib/sprint-lifecycle.mjs` — Sprint lifecycle: close active sprint, create next, move carryover tickets.
+- `lib/planner.mjs` — Planning agent orchestrator: plan.md → analyze → sprints → tasks → Jira import. State in `autodev/plan-state.json`.
+- `lib/planner-prompts.mjs` — Prompt templates for each planning step (analyze, sprints, tasks).
 
 ## Jira API specifics
 
