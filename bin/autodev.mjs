@@ -12,7 +12,7 @@
 import { program } from "commander";
 import { loadConfig, projectKeyFromTicket } from "../lib/config.mjs";
 import { setCurrentTicket, log, logError } from "../lib/log.mjs";
-import { fetchTicket, transitionTicket, commentTicket, findNextTicket, findNextTickets, sleep } from "../lib/jira.mjs";
+import { fetchTicket, transitionTicket, commentTicket, findNextTicket, findNextTickets, sleep, addLabel, setComponent } from "../lib/jira.mjs";
 import { git, slugify, createBranch, cleanupBranch, createWorktree, removeWorktree } from "../lib/git.mjs";
 import { buildPrompt, executeWithClaude, evaluateResult } from "../lib/claude.mjs";
 import { createPR, mergePR } from "../lib/github.mjs";
@@ -21,6 +21,25 @@ import { ensureProjectContext } from "../lib/context.mjs";
 import { publishConfluenceReport } from "../lib/confluence.mjs";
 import { exportDoneTasks } from "../lib/export.mjs";
 import { verifyDoneTasks } from "../lib/verify.mjs";
+import { performRelease } from "../lib/release.mjs";
+import { closeActiveSprint } from "../lib/sprint-lifecycle.mjs";
+
+// ─── Component detection ────────────────────────────────────────────────────
+
+function detectComponents(config, modifiedFiles) {
+  const mapping = config.components || {};
+  const detected = new Set();
+  for (const file of modifiedFiles) {
+    for (const [pattern, component] of Object.entries(mapping)) {
+      // Simple glob: "src/api/**" matches "src/api/foo/bar.js"
+      const prefix = pattern.replace(/\*\*$/, "").replace(/\*$/, "");
+      if (file.startsWith(prefix)) {
+        detected.add(component);
+      }
+    }
+  }
+  return [...detected];
+}
 
 const MAX_NEXT_ATTEMPTS = 3;
 let mergeQueue = Promise.resolve();
@@ -120,6 +139,17 @@ async function handleSuccess(config, ticket, branch, evalResult, autoClose = fal
   const prBodyStr = prBody.join("\n");
   const prUrl = createPR(config, prTitle, prBodyStr);
 
+  // Auto-label and component detection
+  try {
+    await addLabel(config, ticket.key, "autodev-processed");
+    const components = detectComponents(config, evalResult.modifiedFiles || []);
+    for (const comp of components) {
+      await setComponent(config, ticket.key, comp);
+    }
+  } catch (e) {
+    logError(`Auto-label failed (non-blocking): ${e.message}`);
+  }
+
   if (autoClose) {
     await withMergeLock(async () => {
       log("Auto-closing: waiting for merge slot...");
@@ -185,6 +215,14 @@ async function handleFailure(config, ticket, branch, reason, { blocked = false }
     );
   } catch (e) {
     logError(`Failed to comment: ${e.message}`);
+  }
+
+  // Auto-label
+  try {
+    const label = blocked ? "autodev-blocked" : "autodev-failed";
+    await addLabel(config, ticket.key, label);
+  } catch (e) {
+    logError(`Auto-label failed (non-blocking): ${e.message}`);
   }
 
   // Transition back to TODO
@@ -260,6 +298,12 @@ async function processTicket(config, key, { dryRun = false, autoClose = false, b
       log("ALREADY DONE — closing ticket without PR...");
       cleanupBranch(config, branch);
 
+      try {
+        await addLabel(config, ticket.key, "autodev-already-done");
+      } catch (e) {
+        logError(`Auto-label failed (non-blocking): ${e.message}`);
+      }
+
       if (autoClose) {
         await transitionTicket(config, key, config.transitions.done);
       }
@@ -305,6 +349,9 @@ program
   .option("--export-done", "Export done tasks to Markdown")
   .option("--sprint <name>", "Filter by sprint name (with --export-done)")
   .option("--verify", "Verify done tasks (functional code review)")
+  .option("--release [version]", "Create a release (version name or --auto)")
+  .option("--close-sprint", "Close active sprint, create next, move tickets")
+  .option("--no-recap", "Skip recap generation (with --close-sprint)")
   .action(async (ticket, opts) => {
     try {
       await run(ticket, opts);
@@ -334,7 +381,7 @@ async function run(ticket, opts) {
       console.error("Error: --next requires --project <key> when no ticket is given");
       process.exit(1);
     }
-  } else if (init || exportDone || verify) {
+  } else if (init || exportDone || verify || opts.release || opts.closeSprint) {
     console.error("Error: --init/--export-done/--verify requires --project <key>");
     process.exit(1);
   } else {
@@ -373,6 +420,29 @@ async function run(ticket, opts) {
       logError("Verification failed");
     }
     process.exit(result?.success ? 0 : 1);
+  }
+
+  // --release: create a release
+  if (opts.release) {
+    const isAuto = opts.release === true;
+    const result = await performRelease(config, {
+      version: isAuto ? undefined : opts.release,
+      auto: isAuto,
+      dryRun,
+    });
+    if (result) {
+      log(`Release ${result.versionName}: ${result.ticketCount} tickets`);
+    }
+    process.exit(result ? 0 : 1);
+  }
+
+  // --close-sprint: close active sprint
+  if (opts.closeSprint) {
+    const result = await closeActiveSprint(config, {
+      noRecap: opts.recap === false,
+      dryRun,
+    });
+    process.exit(result ? 0 : 1);
   }
 
   // Ensure context is ready (validate unless dry-run)
