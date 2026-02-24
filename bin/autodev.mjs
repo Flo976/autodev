@@ -376,6 +376,13 @@ program
     }
   });
 
+// ─── Interactive mode (no arguments) ─────────────────────────────────────
+if (process.argv.length <= 2) {
+  const { startInteractive } = await import("./autodev-interactive.mjs");
+  await startInteractive();
+  process.exit(0);
+}
+
 program.parse();
 
 // ─── Main run logic ─────────────────────────────────────────────────────────
