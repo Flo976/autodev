@@ -22,6 +22,10 @@ node bin/autodev.mjs --project HIVE --export-done                     # Export d
 node bin/autodev.mjs --project HIVE --export-done --sprint "Sprint 3" # Filter by sprint
 node bin/autodev.mjs --project HIVE --verify                          # Functional verification of done tasks
 node bin/autodev.mjs --project HIVE --verify --sprint "Sprint 3"      # Verify specific sprint
+node bin/autodev.mjs --project HIVE --release "v1.0.0"                # Create release with explicit version
+node bin/autodev.mjs --project HIVE --release --dry-run               # Auto-detect version, preview
+node bin/autodev.mjs --project HIVE --close-sprint                    # Close sprint, create next
+node bin/autodev.mjs --project HIVE --close-sprint --dry-run          # Preview sprint close
 ```
 
 No test suite — validate via `--dry-run` on representative tickets.
@@ -46,13 +50,15 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 9. On sprint completion, auto-generate recap in `docs/sprints/`
 
 **Key modules:**
-- `lib/jira.mjs` — Jira REST API v3 with 150ms throttle. Handles ADF descriptions, issue links, transitions, comments, JQL search.
+- `lib/jira.mjs` — Jira REST API v3 + Agile API v1 with 150ms throttle. Handles ADF descriptions, issue links, transitions, comments, JQL search, versions, sprints, labels, components.
 - `lib/claude.mjs` — Prompt building + CLI execution. Marker file detection (`BLOCKED.md`, `ALREADY_DONE.md`). Auto-commits uncommitted changes.
 - `lib/git.mjs` — Branch creation/cleanup, worktree management for parallel mode (`/tmp/autodev-{KEY}`).
 - `lib/github.mjs` — PR creation/merge via `gh` CLI.
 - `lib/context.mjs` — Bootstraps `autodev/` context directory in target repos from `templates/`.
 - `lib/sprint.mjs` — Detects sprint completion, generates recap markdown, creates recap PR.
-- `lib/confluence.mjs` — Optional: publishes implementation reports to Confluence Cloud API v2.
+- `lib/confluence.mjs` — Confluence Cloud API v2: CRUD pages, markdown-to-storage conversion, implementation reports.
+- `lib/release.mjs` — Release management: Jira versions, fixVersion assignment, release notes, GitHub Release, Confluence changelog.
+- `lib/sprint-lifecycle.mjs` — Sprint lifecycle: close active sprint, create next, move carryover tickets.
 
 ## Jira API specifics
 
@@ -63,7 +69,7 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 
 ## Project config format
 
-Each project needs `projects/{KEY}.json` with: `projectKey`, `repoPath`, `ghRepo`, `statuses` (TODO/IN_PROGRESS/DONE IDs), `transitions` (start/done/reopen names), `promptContext`. Optional: `confluence` block.
+Each project needs `projects/{KEY}.json` with: `projectKey`, `repoPath`, `ghRepo`, `statuses` (TODO/IN_PROGRESS/DONE IDs), `transitions` (start/done/reopen names), `promptContext`. Optional: `confluence` block, `release` block (`tagPrefix`, `confluenceChangelogPageId`), `components` mapping (glob pattern → component name), `boardId`.
 
 ## Conventions
 
