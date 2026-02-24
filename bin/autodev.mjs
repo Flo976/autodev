@@ -23,6 +23,9 @@ import { exportDoneTasks } from "../lib/export.mjs";
 import { verifyDoneTasks } from "../lib/verify.mjs";
 import { performRelease } from "../lib/release.mjs";
 import { closeActiveSprint } from "../lib/sprint-lifecycle.mjs";
+import { existsSync } from "fs";
+import { join } from "path";
+import { stepAnalyze, stepSprints, stepTasks, stepValidate, stepImport } from "../lib/planner.mjs";
 
 // ─── Component detection ────────────────────────────────────────────────────
 
@@ -352,6 +355,9 @@ program
   .option("--release [version]", "Create a release (version name or --auto)")
   .option("--close-sprint", "Close active sprint, create next, move tickets")
   .option("--no-recap", "Skip recap generation (with --close-sprint)")
+  .option("--plan <file>", "Plan file to process (planning agent)")
+  .option("--step <step>", "Planning step: analyze, sprints, tasks, validate")
+  .option("--import", "Import planned tasks to Jira")
   .action(async (ticket, opts) => {
     try {
       await run(ticket, opts);
@@ -381,7 +387,7 @@ async function run(ticket, opts) {
       console.error("Error: --next requires --project <key> when no ticket is given");
       process.exit(1);
     }
-  } else if (init || exportDone || verify || opts.release || opts.closeSprint) {
+  } else if (init || exportDone || verify || opts.release || opts.closeSprint || opts.plan) {
     console.error("Error: --init/--export-done/--verify requires --project <key>");
     process.exit(1);
   } else {
@@ -443,6 +449,38 @@ async function run(ticket, opts) {
       dryRun,
     });
     process.exit(result ? 0 : 1);
+  }
+
+  // --plan: planning agent
+  if (opts.plan) {
+    const resolvedPlan = existsSync(join(config.repoPath, opts.plan))
+      ? join(config.repoPath, opts.plan)
+      : existsSync(opts.plan)
+        ? opts.plan
+        : null;
+
+    if (!resolvedPlan) {
+      console.error(`Error: plan file not found: ${opts.plan}`);
+      process.exit(1);
+    }
+
+    if (opts["import"]) {
+      await stepImport(config, { dryRun });
+    } else if (opts.step === "analyze") {
+      await stepAnalyze(config, resolvedPlan);
+    } else if (opts.step === "sprints") {
+      await stepSprints(config, resolvedPlan);
+    } else if (opts.step === "tasks") {
+      await stepTasks(config, resolvedPlan);
+    } else if (opts.step === "validate") {
+      stepValidate(config);
+    } else {
+      // Full flow: analyze → wait
+      log("Running full planning flow (step 0: analyze)...");
+      await stepAnalyze(config, resolvedPlan);
+      log("Next: review autodev/plan-analysis.md, write autodev/plan-answers.md, then run --step sprints");
+    }
+    process.exit(0);
   }
 
   // Ensure context is ready (validate unless dry-run)
