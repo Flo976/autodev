@@ -71,7 +71,7 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 - `lib/sprint-lifecycle.mjs` — Sprint lifecycle: close active sprint, create next, move carryover tickets.
 - `lib/planner.mjs` — Planning agent orchestrator: plan.md → analyze → sprints → tasks → Jira import. State in `autodev/plan-state.json`.
 - `lib/planner-prompts.mjs` — Prompt templates for each planning step (analyze, sprints, tasks).
-- `lib/metrics.mjs` — Sprint velocity tracking, stale ticket detection.
+- `lib/metrics.mjs` — Sprint velocity, average lead time, stale ticket detection.
 
 ## Jira API specifics
 
@@ -82,7 +82,7 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 
 ## Project config format
 
-Each project needs `projects/{KEY}.json` with: `projectKey`, `repoPath`, `ghRepo`, `statuses` (TODO/IN_PROGRESS/DONE IDs), `transitions` (start/done/reopen names), `promptContext`. Optional: `confluence` block, `release` block (`tagPrefix`, `confluenceChangelogPageId`), `components` mapping (glob pattern → component name), `boardId`, `sprintBranches` block (`enabled`, `mergeStrategy`).
+Each project needs `projects/{KEY}.json` with: `projectKey`, `repoPath`, `ghRepo`, `statuses` (TODO/IN_PROGRESS/DONE IDs), `transitions` (start/done/reopen names), `promptContext`. Optional: `confluence` block, `release` block (`tagPrefix`, `confluenceChangelogPageId`), `components` mapping (glob pattern → component name), `boardId`, `sprintBranches` block (`enabled`, `mergeStrategy`), `storyPointsField` (Jira field name for story points, e.g. `"customfield_10016"`).
 
 ## Conventions
 

@@ -113,6 +113,11 @@ function checkDependencies(config, ticket) {
 async function handleSuccess(config, ticket, branch, evalResult, autoClose = false) {
   log("SUCCESS — Pushing and creating PR...");
 
+  // Determine base branch for PR
+  const baseBranch = config.sprintBranches?.enabled && ticket.sprintName
+    ? `sprint/sprint-${ticket.sprintName.match(/(\d+)/)?.[1] || ticket.sprintName}`
+    : "main";
+
   // Push branch
   git(config, `push -u origin ${branch}`);
   log(`Pushed to origin/${branch}`);
@@ -132,7 +137,7 @@ async function handleSuccess(config, ticket, branch, evalResult, autoClose = fal
   ];
 
   try {
-    const commits = git(config, "log main..HEAD --oneline");
+    const commits = git(config, `log ${baseBranch}..HEAD --oneline`);
     prBody.push("```", commits, "```");
   } catch {
     prBody.push("Voir la branche.");
@@ -141,7 +146,7 @@ async function handleSuccess(config, ticket, branch, evalResult, autoClose = fal
   prBody.push("", "---", `Generee par autodev`);
 
   const prBodyStr = prBody.join("\n");
-  const prUrl = createPR(config, prTitle, prBodyStr);
+  const prUrl = createPR(config, prTitle, prBodyStr, { baseBranch });
 
   // Auto-label and component detection
   try {
@@ -392,7 +397,7 @@ async function run(ticket, opts) {
       process.exit(1);
     }
   } else if (init || exportDone || verify || opts.release || opts.closeSprint || opts.plan || opts.velocity || opts.stale) {
-    console.error("Error: --init/--export-done/--verify requires --project <key>");
+    console.error("Error: this command requires --project <key>");
     process.exit(1);
   } else {
     console.error("Error: provide a ticket key or use --next");
