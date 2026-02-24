@@ -26,6 +26,7 @@ import { closeActiveSprint } from "../lib/sprint-lifecycle.mjs";
 import { existsSync } from "fs";
 import { join } from "path";
 import { stepAnalyze, stepSprints, stepTasks, stepValidate, stepImport } from "../lib/planner.mjs";
+import { getVelocity, getStaleTickets } from "../lib/metrics.mjs";
 
 // ─── Component detection ────────────────────────────────────────────────────
 
@@ -358,6 +359,9 @@ program
   .option("--plan <file>", "Plan file to process (planning agent)")
   .option("--step <step>", "Planning step: analyze, sprints, tasks, validate")
   .option("--import", "Import planned tasks to Jira")
+  .option("--velocity", "Show sprint velocity")
+  .option("--stale", "Show stale tickets (in progress too long)")
+  .option("--days <n>", "Days threshold for --stale (default: 7)", "7")
   .action(async (ticket, opts) => {
     try {
       await run(ticket, opts);
@@ -387,7 +391,7 @@ async function run(ticket, opts) {
       console.error("Error: --next requires --project <key> when no ticket is given");
       process.exit(1);
     }
-  } else if (init || exportDone || verify || opts.release || opts.closeSprint || opts.plan) {
+  } else if (init || exportDone || verify || opts.release || opts.closeSprint || opts.plan || opts.velocity || opts.stale) {
     console.error("Error: --init/--export-done/--verify requires --project <key>");
     process.exit(1);
   } else {
@@ -479,6 +483,36 @@ async function run(ticket, opts) {
       log("Running full planning flow (step 0: analyze)...");
       await stepAnalyze(config, resolvedPlan);
       log("Next: review autodev/plan-analysis.md, write autodev/plan-answers.md, then run --step sprints");
+    }
+    process.exit(0);
+  }
+
+  // --velocity
+  if (opts.velocity) {
+    const results = await getVelocity(config);
+    console.log("\nSprint Velocity:");
+    for (const s of results) {
+      console.log(`  ${s.name}: ${s.points} SP (${s.tickets} tickets)`);
+    }
+    const avg = results.length > 0
+      ? Math.round(results.reduce((s, r) => s + r.points, 0) / results.length)
+      : 0;
+    console.log(`\n  Average: ${avg} SP/sprint`);
+    process.exit(0);
+  }
+
+  // --stale
+  if (opts.stale) {
+    const days = parseInt(opts.days) || 7;
+    const stale = await getStaleTickets(config, days);
+    if (stale.length === 0) {
+      log(`No tickets stale for more than ${days} days.`);
+    } else {
+      console.log(`\n${stale.length} stale tickets (> ${days} days):`);
+      for (const t of stale) {
+        const daysAgo = Math.floor((Date.now() - new Date(t.updated).getTime()) / 86400000);
+        console.log(`  ${t.key}: ${t.summary} (${t.assignee}, ${daysAgo}d ago)`);
+      }
     }
     process.exit(0);
   }
