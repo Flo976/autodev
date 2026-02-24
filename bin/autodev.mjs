@@ -20,6 +20,7 @@ import { checkSprintCompletion, createSprintBranch } from "../lib/sprint.mjs";
 import { ensureProjectContext } from "../lib/context.mjs";
 import { publishConfluenceReport } from "../lib/confluence.mjs";
 import { exportDoneTasks } from "../lib/export.mjs";
+import { verifyDoneTasks } from "../lib/verify.mjs";
 
 const MAX_NEXT_ATTEMPTS = 3;
 let mergeQueue = Promise.resolve();
@@ -303,6 +304,7 @@ program
   .option("--init", "Bootstrap context files (Phase 2)")
   .option("--export-done", "Export done tasks to Markdown")
   .option("--sprint <name>", "Filter by sprint name (with --export-done)")
+  .option("--verify", "Verify done tasks (functional code review)")
   .action(async (ticket, opts) => {
     try {
       await run(ticket, opts);
@@ -317,7 +319,7 @@ program.parse();
 // ─── Main run logic ─────────────────────────────────────────────────────────
 
 async function run(ticket, opts) {
-  const { project, next, autoClose, dryRun, init, exportDone, sprint } = opts;
+  const { project, next, autoClose, dryRun, init, exportDone, sprint, verify } = opts;
   const parallel = Math.min(parseInt(opts.parallel) || 1, 4);
 
   // Resolve project key
@@ -332,8 +334,8 @@ async function run(ticket, opts) {
       console.error("Error: --next requires --project <key> when no ticket is given");
       process.exit(1);
     }
-  } else if (init || exportDone) {
-    console.error("Error: --init/--export-done requires --project <key>");
+  } else if (init || exportDone || verify) {
+    console.error("Error: --init/--export-done/--verify requires --project <key>");
     process.exit(1);
   } else {
     console.error("Error: provide a ticket key or use --next");
@@ -356,6 +358,21 @@ async function run(ticket, opts) {
       log(`Done tasks exported to ${filePath}`);
     }
     process.exit(0);
+  }
+
+  // --verify: functional verification of done tasks
+  if (verify) {
+    const result = await verifyDoneTasks(config, { sprint });
+    if (result?.success) {
+      log(`Verification complete: ${result.reportPath}`);
+      log(`${result.criticalCount} critical, ${result.warningCount} warnings`);
+      if (result.createdTickets.length > 0) {
+        log(`${result.createdTickets.length} Jira tickets created`);
+      }
+    } else {
+      logError("Verification failed");
+    }
+    process.exit(result?.success ? 0 : 1);
   }
 
   // Ensure context is ready (validate unless dry-run)
