@@ -20,6 +20,8 @@ node bin/autodev.mjs --project HIVE --next --auto-close --parallel 3  # Parallel
 node bin/autodev.mjs --project HIVE --init               # Bootstrap context files in target repo
 node bin/autodev.mjs --project HIVE --export-done                     # Export done tasks to Markdown
 node bin/autodev.mjs --project HIVE --export-done --sprint "Sprint 3" # Filter by sprint
+node bin/autodev.mjs --project HIVE --verify                          # Functional verification of done tasks
+node bin/autodev.mjs --project HIVE --verify --sprint "Sprint 3"      # Verify specific sprint
 ```
 
 No test suite — validate via `--dry-run` on representative tickets.
