@@ -18,6 +18,8 @@ node bin/autodev.mjs --project HIVE --next               # Pick next unblocked t
 node bin/autodev.mjs --project HIVE --next --auto-close  # Loop: execute, merge, close, repeat
 node bin/autodev.mjs --project HIVE --next --auto-close --parallel 3  # Parallel via worktrees
 node bin/autodev.mjs --project HIVE --init               # Bootstrap context files in target repo
+node bin/autodev.mjs --project HIVE --export-done                     # Export done tasks to Markdown
+node bin/autodev.mjs --project HIVE --export-done --sprint "Sprint 3" # Filter by sprint
 ```
 
 No test suite — validate via `--dry-run` on representative tickets.
