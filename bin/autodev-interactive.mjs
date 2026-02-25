@@ -276,6 +276,11 @@ async function handleExport(config) {
 }
 
 async function handleBatch(config) {
+  const sprint = await input({
+    message: "Sprint name (vide = sprints actifs)",
+    default: "",
+  });
+
   const autoClose = await confirm({
     message: "Auto-close (merge + fermer) ?",
     default: false,
@@ -287,6 +292,7 @@ async function handleBatch(config) {
   });
 
   const args = ["bin/autodev.mjs", "--project", config.projectKey, "--batch"];
+  if (sprint) args.push("--sprint", sprint);
   if (autoClose) args.push("--auto-close");
   if (dryRun) args.push("--dry-run");
 

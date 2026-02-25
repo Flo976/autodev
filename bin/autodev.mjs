@@ -578,7 +578,7 @@ async function run(ticket, opts) {
   // --batch: batch mode
   if (opts.batch) {
     ensureProjectContext(config, { skipValidation: dryRun });
-    await runBatch(config, { autoClose, dryRun });
+    await runBatch(config, { autoClose, dryRun, sprint });
     process.exit(0);
   }
 
