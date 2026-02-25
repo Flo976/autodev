@@ -275,6 +275,24 @@ async function handleExport(config) {
   runAutodev(args);
 }
 
+async function handleBatch(config) {
+  const autoClose = await confirm({
+    message: "Auto-close (merge + fermer) ?",
+    default: false,
+  });
+
+  const dryRun = await confirm({
+    message: "Dry-run ?",
+    default: false,
+  });
+
+  const args = ["bin/autodev.mjs", "--project", config.projectKey, "--batch"];
+  if (autoClose) args.push("--auto-close");
+  if (dryRun) args.push("--dry-run");
+
+  runAutodev(args);
+}
+
 async function handleInit(config) {
   runAutodev(["bin/autodev.mjs", "--project", config.projectKey, "--init"]);
 }
@@ -285,6 +303,7 @@ async function handleAction(action, config) {
   try {
     switch (action) {
       case "ticket":  return await handleTicket(config);
+      case "batch":   return await handleBatch(config);
       case "release": return await handleRelease(config);
       case "sprint":  return await handleSprint(config);
       case "planning": return await handlePlanning(config);
@@ -309,6 +328,7 @@ async function mainMenu(projectKey, config) {
       message: `${projectKey} >`,
       choices: [
         { name: "Executer un ticket", value: "ticket" },
+        { name: "Batch (grouper et executer)", value: "batch" },
         { name: "Release",            value: "release" },
         { name: "Sprint",             value: "sprint" },
         { name: "Planning",           value: "planning" },
