@@ -13,7 +13,7 @@ import { program } from "commander";
 import { loadConfig, projectKeyFromTicket } from "../lib/config.mjs";
 import { setCurrentTicket, log, logError } from "../lib/log.mjs";
 import { fetchTicket, transitionTicket, commentTicket, findNextTicket, findNextTickets, sleep, addLabel, setComponent } from "../lib/jira.mjs";
-import { git, slugify, createBranch, cleanupBranch, createWorktree, removeWorktree } from "../lib/git.mjs";
+import { git, slugify, createBranch, cleanupBranch, createWorktree, removeWorktree, isWorktree } from "../lib/git.mjs";
 import { buildPrompt, executeWithClaude, evaluateResult } from "../lib/claude.mjs";
 import { createPR, mergePR } from "../lib/github.mjs";
 import { checkSprintCompletion, createSprintBranch } from "../lib/sprint.mjs";
@@ -27,6 +27,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { stepAnalyze, stepSprints, stepTasks, stepValidate, stepImport } from "../lib/planner.mjs";
 import { getVelocity, getStaleTickets } from "../lib/metrics.mjs";
+import { runBatch } from "../lib/batch.mjs";
 
 // ─── Component detection ────────────────────────────────────────────────────
 
@@ -62,27 +63,33 @@ async function withMergeLock(fn) {
   }
 }
 
-function mergeWithRetry(config, prUrl, branch, maxRetries = 2) {
-  let attempt = 0;
-  while (attempt < maxRetries) {
-    attempt += 1;
+async function mergeWithRetry(config, prUrl, branch, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       mergePR(config, prUrl);
       return;
     } catch (e) {
       if (attempt >= maxRetries) throw e;
-      logError(`Merge failed (attempt ${attempt}/${maxRetries}): ${e.message}`);
-      log("Rebasing branch on origin/main and retrying merge...");
+      logError(`Merge failed (attempt ${attempt}/${maxRetries}): ${e.message}`, config);
+
+      // If "not mergeable", GitHub may still be processing — wait and retry
+      if (e.message.includes("not mergeable")) {
+        log(`Waiting ${5 * attempt}s before retry...`, config);
+        await sleep(5000 * attempt);
+        continue;
+      }
+
+      // Otherwise try rebase + force-push
+      log("Rebasing branch on origin/main and retrying merge...", config);
       try {
         git(config, "fetch origin main");
         git(config, `checkout ${branch}`);
         git(config, "rebase origin/main");
-        git(config, "push --force-with-lease");
+        git(config, `push --force-with-lease origin ${branch}`);
+        await sleep(5000);
       } catch (rebaseErr) {
-        logError(`Rebase failed: ${rebaseErr.message}`);
-        try {
-          git(config, "rebase --abort");
-        } catch {}
+        logError(`Rebase failed: ${rebaseErr.message}`, config);
+        try { git(config, "rebase --abort"); } catch {}
         throw rebaseErr;
       }
     }
@@ -97,30 +104,30 @@ function checkDependencies(config, ticket) {
   );
 
   if (blockers.length > 0) {
-    log(`BLOCKED by ${blockers.length} unresolved tickets:`);
+    log(`BLOCKED by ${blockers.length} unresolved tickets:`, config);
     for (const b of blockers) {
-      log(`  ${b.key} "${b.summary}" (${b.status})`);
+      log(`  ${b.key} "${b.summary}" (${b.status})`, config);
     }
     return { blocked: true, blockers };
   }
 
-  log("No blocking dependencies");
+  log("No blocking dependencies", config);
   return { blocked: false, blockers: [] };
 }
 
 // ─── Handle success ─────────────────────────────────────────────────────────
 
 async function handleSuccess(config, ticket, branch, evalResult, autoClose = false) {
-  log("SUCCESS — Pushing and creating PR...");
+  log("SUCCESS — Pushing and creating PR...", config);
 
   // Determine base branch for PR
   const baseBranch = config.sprintBranches?.enabled && ticket.sprintName
     ? `sprint/sprint-${ticket.sprintName.match(/(\d+)/)?.[1] || ticket.sprintName}`
     : "main";
 
-  // Push branch
-  git(config, `push -u origin ${branch}`);
-  log(`Pushed to origin/${branch}`);
+  // Push branch (force-with-lease handles stale remote branches from previous runs)
+  git(config, `push --force-with-lease -u origin ${branch}`);
+  log(`Pushed to origin/${branch}`, config);
 
   // Create PR
   const prTitle = `${ticket.key}: ${ticket.summary}`;
@@ -156,19 +163,45 @@ async function handleSuccess(config, ticket, branch, evalResult, autoClose = fal
       await setComponent(config, ticket.key, comp);
     }
   } catch (e) {
-    logError(`Auto-label failed (non-blocking): ${e.message}`);
+    logError(`Auto-label failed (non-blocking): ${e.message}`, config);
   }
 
   if (autoClose) {
+    let merged = false;
     await withMergeLock(async () => {
-      log("Auto-closing: waiting for merge slot...");
-      // Merge PR (squash) and delete remote branch
-      log("Auto-closing: merging PR...");
-      mergeWithRetry(config, prUrl, branch, 2);
+      log("Auto-closing: waiting for merge slot...", config);
 
-      // Update local repo
-      git(config, "checkout main");
-      git(config, "pull --rebase origin main");
+      // Proactive rebase on latest main before merge attempt
+      try {
+        git(config, "fetch origin main");
+        git(config, "rebase origin/main");
+        git(config, `push --force-with-lease origin ${branch}`);
+      } catch (rebaseErr) {
+        // Rebase failed (conflicts) — abort rebase, leave PR open
+        try { git(config, "rebase --abort"); } catch {}
+        log(`Merge conflicts detected — leaving PR open for manual resolution`, config);
+        await commentTicket(
+          config,
+          ticket.key,
+          `[AutoDev] PR creee mais merge impossible (conflits avec main) : ${prUrl}\n\nResolution manuelle necessaire.`
+        );
+        return;
+      }
+
+      // Wait for GitHub to recalculate mergeability after force-push
+      log("Waiting 5s for GitHub to update PR status...", config);
+      await sleep(5000);
+
+      // Merge PR (squash) and delete remote branch
+      log("Auto-closing: merging PR...", config);
+      await mergeWithRetry(config, prUrl, branch, 3);
+      merged = true;
+
+      // Update local repo (skip in worktree — main is checked out elsewhere)
+      if (!isWorktree(config)) {
+        git(config, "checkout main");
+        git(config, "pull --rebase origin main");
+      }
 
       // Transition to done
       await transitionTicket(config, ticket.key, config.transitions.done);
@@ -186,6 +219,8 @@ async function handleSuccess(config, ticket, branch, evalResult, autoClose = fal
         await commentTicket(config, ticket.key, `[AutoDev] Rapport Confluence : ${confluenceUrl}`);
       }
     });
+    // PR created but not merged due to conflicts — still a partial success
+    if (!merged) return prUrl;
   } else {
     // Comment in Jira (PR only, no merge)
     await commentTicket(
@@ -207,7 +242,7 @@ async function handleSuccess(config, ticket, branch, evalResult, autoClose = fal
 // ─── Handle failure ─────────────────────────────────────────────────────────
 
 async function handleFailure(config, ticket, branch, reason, { blocked = false } = {}) {
-  logError(`FAILED: ${reason}`);
+  logError(`FAILED: ${reason}`, config);
 
   // Cleanup branch
   cleanupBranch(config, branch);
@@ -223,7 +258,7 @@ async function handleFailure(config, ticket, branch, reason, { blocked = false }
       `${prefix}\n\n${reason.substring(0, 1000)}`
     );
   } catch (e) {
-    logError(`Failed to comment: ${e.message}`);
+    logError(`Failed to comment: ${e.message}`, config);
   }
 
   // Auto-label
@@ -231,23 +266,24 @@ async function handleFailure(config, ticket, branch, reason, { blocked = false }
     const label = blocked ? "autodev-blocked" : "autodev-failed";
     await addLabel(config, ticket.key, label);
   } catch (e) {
-    logError(`Auto-label failed (non-blocking): ${e.message}`);
+    logError(`Auto-label failed (non-blocking): ${e.message}`, config);
   }
 
   // Transition back to TODO
   try {
     await transitionTicket(config, ticket.key, config.transitions.reopen);
   } catch (e) {
-    logError(`Failed to transition back: ${e.message}`);
+    logError(`Failed to transition back: ${e.message}`, config);
   }
 }
 
 // ─── Process a single ticket ────────────────────────────────────────────────
 
 async function processTicket(config, key, { dryRun = false, autoClose = false, branch: existingBranch = null } = {}) {
+  config = { ...config, ticketKey: key };
   setCurrentTicket(key);
-  log("=".repeat(60));
-  log(`Processing ticket${dryRun ? " (DRY RUN)" : ""}`);
+  log("=".repeat(60), config);
+  log(`Processing ticket${dryRun ? " (DRY RUN)" : ""}`, config);
 
   // 1. Fetch ticket
   const ticket = await fetchTicket(config, key);
@@ -256,7 +292,7 @@ async function processTicket(config, key, { dryRun = false, autoClose = false, b
   const deps = checkDependencies(config, ticket);
   if (deps.blocked) {
     if (dryRun) {
-      log("DRY RUN: ticket is blocked, would skip");
+      log("DRY RUN: ticket is blocked, would skip", config);
       return { success: false, reason: "blocked" };
     }
     return { success: false, reason: "blocked", blockers: deps.blockers };
@@ -264,17 +300,17 @@ async function processTicket(config, key, { dryRun = false, autoClose = false, b
 
   // 3. Check status
   if (ticket.statusId === config.statuses.DONE) {
-    log("Ticket already done — skipping");
+    log("Ticket already done — skipping", config);
     return { success: false, reason: "already_done" };
   }
 
   if (dryRun) {
-    log("DRY RUN: ticket is eligible");
-    log(`Summary: ${ticket.summary}`);
-    log(`Description (${ticket.description.length} chars)`);
-    log(`Links: ${ticket.links.length}, Comments: ${ticket.comments.length}`);
+    log("DRY RUN: ticket is eligible", config);
+    log(`Summary: ${ticket.summary}`, config);
+    log(`Description (${ticket.description.length} chars)`, config);
+    log(`Links: ${ticket.links.length}, Comments: ${ticket.comments.length}`, config);
     const prompt = buildPrompt(config, ticket);
-    log(`Prompt length: ${prompt.length} chars`);
+    log(`Prompt length: ${prompt.length} chars`, config);
     console.log("\n--- PROMPT PREVIEW ---\n");
     console.log(prompt);
     console.log("\n--- END PREVIEW ---\n");
@@ -294,23 +330,23 @@ async function processTicket(config, key, { dryRun = false, autoClose = false, b
 
     // 6. Build prompt and execute
     const prompt = buildPrompt(config, ticket);
-    log(`Prompt: ${prompt.length} chars`);
+    log(`Prompt: ${prompt.length} chars`, config);
 
     const claudeOutput = await executeWithClaude(config, prompt);
-    log(`Claude finished (exit code: ${claudeOutput.code})`);
+    log(`Claude finished (exit code: ${claudeOutput.code})`, config);
 
     // 7. Evaluate
     const evalResult = evaluateResult(config, claudeOutput);
 
     if (evalResult.alreadyDone) {
       // 8a. Already done — close ticket without PR
-      log("ALREADY DONE — closing ticket without PR...");
+      log("ALREADY DONE — closing ticket without PR...", config);
       cleanupBranch(config, branch);
 
       try {
         await addLabel(config, ticket.key, "autodev-already-done");
       } catch (e) {
-        logError(`Auto-label failed (non-blocking): ${e.message}`);
+        logError(`Auto-label failed (non-blocking): ${e.message}`, config);
       }
 
       if (autoClose) {
@@ -321,12 +357,12 @@ async function processTicket(config, key, { dryRun = false, autoClose = false, b
         key,
         `[AutoDev] Ticket deja implemente — fermeture automatique.\n\n${evalResult.summary}`
       );
-      log("Done (already done)!");
+      log("Done (already done)!", config);
       return { success: true, alreadyDone: true, sprintName: ticket.sprintName };
     } else if (evalResult.success) {
       // 8b. Success — create PR
       const prUrl = await handleSuccess(config, ticket, branch, evalResult, autoClose);
-      log("Done!");
+      log("Done!", config);
       return { success: true, prUrl, sprintName: ticket.sprintName };
     } else {
       // 9. Failure
@@ -336,8 +372,17 @@ async function processTicket(config, key, { dryRun = false, autoClose = false, b
     }
   } catch (error) {
     // Unexpected error
-    logError(error.message);
-    if (branch) await handleFailure(config, ticket, branch, error.message);
+    logError(error.message, config);
+    if (branch) {
+      await handleFailure(config, ticket, branch, error.message);
+    } else {
+      // Branch creation failed — transition ticket back to TODO
+      try {
+        await transitionTicket(config, key, config.transitions.reopen);
+      } catch (e) {
+        logError(`Failed to transition back: ${e.message}`, config);
+      }
+    }
     return { success: false, reason: error.message };
   }
 }
@@ -367,6 +412,7 @@ program
   .option("--velocity", "Show sprint velocity")
   .option("--stale", "Show stale tickets (in progress too long)")
   .option("--days <n>", "Days threshold for --stale (default: 7)", "7")
+  .option("--batch", "Batch mode: group and execute related tickets together")
   .action(async (ticket, opts) => {
     try {
       await run(ticket, opts);
@@ -403,7 +449,7 @@ async function run(ticket, opts) {
       console.error("Error: --next requires --project <key> when no ticket is given");
       process.exit(1);
     }
-  } else if (init || exportDone || verify || opts.release || opts.closeSprint || opts.plan || opts.velocity || opts.stale) {
+  } else if (init || exportDone || verify || opts.release || opts.closeSprint || opts.plan || opts.velocity || opts.stale || opts.batch) {
     console.error("Error: this command requires --project <key>");
     process.exit(1);
   } else {
@@ -529,6 +575,13 @@ async function run(ticket, opts) {
     process.exit(0);
   }
 
+  // --batch: batch mode
+  if (opts.batch) {
+    ensureProjectContext(config, { skipValidation: dryRun });
+    await runBatch(config, { autoClose, dryRun });
+    process.exit(0);
+  }
+
   // Ensure context is ready (validate unless dry-run)
   ensureProjectContext(config, { skipValidation: dryRun });
 
@@ -539,8 +592,9 @@ async function run(ticket, opts) {
 
     if (parallel > 1 && opts.next && opts.autoClose) {
       // ─── Parallel mode ──────────────────────────────────────────────
+      const skipKeys = new Set();
       while (true) {
-        const tickets = await findNextTickets(config, parallel);
+        const tickets = await findNextTickets(config, parallel, skipKeys);
         if (tickets.length === 0) {
           log("No eligible tickets. Exiting.");
           break;
@@ -549,27 +603,42 @@ async function run(ticket, opts) {
         log(`Launching ${tickets.length} parallel workers...`);
 
         const results = await Promise.allSettled(
-          tickets.map(async (key) => {
-            const ticket = await fetchTicket(config, key);
-            const slug = slugify(ticket.summary);
+          tickets.map(async ({ key, summary }) => {
+            const workerConfig = { ...config, ticketKey: key };
+            const slug = slugify(summary);
             const number = key.replace(`${config.projectKey}-`, "");
             const branchName = `feat/${config.projectKey}-${number}-${slug}`;
-            const worktreePath = createWorktree(config, key, branchName);
-            const worktreeConfig = { ...config, repoPath: worktreePath };
+
+            // Clean up stale worktree and branch from previous run
+            removeWorktree(workerConfig, key);
+            try {
+              git(config, `branch -D ${branchName}`);
+              log(`Deleted stale local branch ${branchName}`, workerConfig);
+            } catch {
+              // Branch doesn't exist — normal case
+            }
+
+            const worktreePath = createWorktree(workerConfig, key, branchName);
+            const worktreeConfig = { ...workerConfig, repoPath: worktreePath };
 
             try {
               return await processTicket(worktreeConfig, key, { dryRun: false, autoClose: true, branch: branchName });
             } finally {
-              removeWorktree(config, key);
+              removeWorktree(workerConfig, key);
             }
           })
         );
 
         let batchSuccess = 0;
         let batchFail = 0;
-        for (const r of results) {
-          if (r.status === "fulfilled" && r.value?.success) batchSuccess++;
-          else batchFail++;
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          if (r.status === "fulfilled" && r.value?.success) {
+            batchSuccess++;
+          } else {
+            batchFail++;
+            skipKeys.add(tickets[i].key);
+          }
         }
         successes += batchSuccess;
         failures += batchFail;
