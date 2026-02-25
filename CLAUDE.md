@@ -37,6 +37,9 @@ node bin/autodev.mjs --project HIVE --plan docs/plan.md --import --dry-run  # Pr
 node bin/autodev.mjs --project HIVE --velocity                          # Sprint velocity (last 5)
 node bin/autodev.mjs --project HIVE --stale                             # Stale tickets (> 7 days)
 node bin/autodev.mjs --project HIVE --stale --days 14                   # Custom threshold
+node bin/autodev.mjs --project HIVE --batch                              # Batch mode: group + execute
+node bin/autodev.mjs --project HIVE --batch --auto-close                 # Batch + merge + close tickets
+node bin/autodev.mjs --project HIVE --batch --dry-run                    # Preview batch grouping
 ```
 
 No test suite — validate via `--dry-run` on representative tickets.
@@ -73,6 +76,7 @@ All modules are ES modules (`.mjs`, `"type": "module"`). Every lib function take
 - `lib/planner.mjs` — Planning agent orchestrator: plan.md → analyze → sprints → tasks → Jira import. State in `autodev/plan-state.json`.
 - `lib/planner-prompts.mjs` — Prompt templates for each planning step (analyze, sprints, tasks).
 - `lib/metrics.mjs` — Sprint velocity, average lead time, stale ticket detection.
+- `lib/batch.mjs` — Batch mode orchestrator: collect eligible tickets, Claude-driven grouping, interactive validation, grouped execution with one commit per ticket and one PR per group.
 - `bin/autodev-interactive.mjs` — Interactive menu-driven CLI ("AUTODEV by Sooatek"). Launched when no arguments given. Uses `@inquirer/prompts` for menus, delegates to autodev.mjs via child process.
 
 ## Jira API specifics
