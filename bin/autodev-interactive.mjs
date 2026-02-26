@@ -9,10 +9,11 @@
 import { readFileSync, readdirSync } from "fs";
 import { join, dirname, basename } from "path";
 import { fileURLToPath } from "url";
-import { select, input, confirm, number } from "@inquirer/prompts";
+import { select, input, confirm, number, checkbox } from "@inquirer/prompts";
 import { ExitPromptError } from "@inquirer/core";
 import { execFileSync } from "child_process";
 import { loadConfig } from "../lib/config.mjs";
+import { getBoardId, agileFetch } from "../lib/jira.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -276,10 +277,35 @@ async function handleExport(config) {
 }
 
 async function handleBatch(config) {
-  const sprint = await input({
-    message: "Sprint name (vide = sprints actifs)",
-    default: "",
-  });
+  // Fetch available sprints from Jira
+  let sprintFilter = "";
+  try {
+    const boardId = await getBoardId(config);
+    const data = await agileFetch(config,
+      `/rest/agile/1.0/board/${boardId}/sprint?state=active,future&maxResults=50`
+    );
+    const sprints = data.values || [];
+
+    if (sprints.length > 0) {
+      const choices = sprints.map((s) => ({
+        name: `${s.name} (${s.state})`,
+        value: s.name,
+        checked: s.state === "active",
+      }));
+
+      const selected = await checkbox({
+        message: "Sprints (espace = selectionner, entree = valider)",
+        choices,
+      });
+
+      if (selected.length > 0 && selected.length < sprints.length) {
+        sprintFilter = selected.join(", ");
+      }
+      // If all or none selected → use openSprints() default
+    }
+  } catch (e) {
+    console.log(`${c.dim}Impossible de charger les sprints: ${e.message}${c.reset}`);
+  }
 
   const autoClose = await confirm({
     message: "Auto-close (merge + fermer) ?",
@@ -292,7 +318,7 @@ async function handleBatch(config) {
   });
 
   const args = ["bin/autodev.mjs", "--project", config.projectKey, "--batch"];
-  if (sprint) args.push("--sprint", sprint);
+  if (sprintFilter) args.push("--sprint", sprintFilter);
   if (autoClose) args.push("--auto-close");
   if (dryRun) args.push("--dry-run");
 
