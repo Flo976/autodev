@@ -290,7 +290,6 @@ async function handleBatch(config) {
       const choices = sprints.map((s) => ({
         name: `${s.name} (${s.state})`,
         value: s.name,
-        checked: s.state === "active",
       }));
 
       const selected = await checkbox({
